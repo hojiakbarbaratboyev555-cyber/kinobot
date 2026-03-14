@@ -1,7 +1,7 @@
 services:
   - type: web
-    name: ishonch-qutisi-bot
+    name: kinobot
     env: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python main.py"
+    startCommand: "python kino_bot.py"
     plan: free
