@@ -77,7 +77,7 @@ async def start(m: types.Message):
         return await m.answer(
             "📢 Kanalga obuna bo‘ling!",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="📢 Kanal", url="https://t.me/yourchannel")],
+                [types.InlineKeyboardButton(text="📢 Kanal", url="https://t.me/+Kk-MfGR16B5lY2M1")],
                 [types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check")]
             ])
         )
