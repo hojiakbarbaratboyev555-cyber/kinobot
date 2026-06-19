@@ -1,199 +1,253 @@
-# kino_bot.py
-import json
 import asyncio
+import random
+import logging
 import os
-from datetime import datetime, timedelta
 
-from fastapi import FastAPI
-import uvicorn
+import aiosqlite
+from fastapi import FastAPI, Request
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.types import Update
 
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
+# ================= CONFIG =================
 
-# ================== CONFIG ==================
-BOT_TOKEN = "8544683801:AAGrRNaeYQ418IRymUR4d6qObHunc5SmGxU"
-OWNER_ID = 8297497276
-CHANNEL_LINK = "https://t.me/kino_2026_premyera"
+BOT_TOKEN = "8759475620:AAGYtzehxNQlFGPXBS_nfu76vbunbDmG9R0"
 
-# Ma'lumotlar fayllari
-USERS_FILE = "users.json"
-KINO_FILE = "kino.json"
-ADMINS_FILE = "admins.json"
+GROUP_ID = -5587260606
+CHANNEL_ID = -1003869575908  # majburiy obuna kanal
 
-# ================== INIT BOT ==================
-bot = Bot(token=BOT_TOKEN)
+WEBHOOK_HOST = "https://kinobot-0yka.onrender.com"
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+
+DB = "bot.db"
+PORT = int(os.environ.get("PORT", 10000))
+
+# ================= INIT =================
+
+bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
+logging.basicConfig(level=logging.INFO)
+
+# vaqtincha serial storage
+serial_temp = {}
+
+# ================= DB =================
+
+async def init_db():
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS content (
+            code TEXT PRIMARY KEY,
+            message_id INTEGER
+        )
+        """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY
+        )
+        """)
+        await db.commit()
+
+async def add_user(uid):
+    async with aiosqlite.connect(DB) as db:
+        await db.execute("INSERT OR IGNORE INTO users VALUES(?)", (uid,))
+        await db.commit()
+
+async def get_users():
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute("SELECT user_id FROM users")
+        return await cur.fetchall()
+
+# ================= SUB CHECK =================
+
+async def check_sub(user_id):
+    try:
+        m = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return m.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
+# ================= START =================
+
+@dp.message(F.text == "/start")
+async def start(m: types.Message):
+    await add_user(m.from_user.id)
+
+    if not await check_sub(m.from_user.id):
+        return await m.answer(
+            "📢 Kanalga obuna bo‘ling!",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="📢 Kanal", url="https://t.me/yourchannel")],
+                [types.InlineKeyboardButton(text="✅ Tekshirish", callback_data="check")]
+            ])
+        )
+
+    await m.answer("🎬 Kino botga xush kelibsiz!\nKod yuboring.")
+
+# ================= CHECK BUTTON =================
+
+@dp.callback_query(F.data == "check")
+async def check(call: types.CallbackQuery):
+    if await check_sub(call.from_user.id):
+        await call.message.edit_text("✅ Obuna tasdiqlandi!\nKod yuboring.")
+    else:
+        await call.answer("❌ Obuna yo‘q", show_alert=True)
+
+# ================= GROUP HANDLER =================
+
+@dp.message(F.chat.id == GROUP_ID)
+async def group(m: types.Message):
+
+    if not m.reply_to_message:
+        return
+
+    text = m.text or ""
+
+    # 🎬 KINO
+    if text == "/kino":
+        code = str(random.randint(1000, 9999))
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO content VALUES(?,?)",
+                (code, m.reply_to_message.message_id)
+            )
+            await db.commit()
+
+        await m.reply(f"🎬 Kod: {code}")
+
+    # 📺 SERIAL START
+    elif text == "/serial":
+        code = str(random.randint(1000, 9999))
+
+        serial_temp[m.from_user.id] = {
+            "code": code,
+            "start_id": m.reply_to_message.message_id
+        }
+
+        await m.reply(f"📺 Serial boshlandi: {code}")
+
+    # 📺 SERIAL END
+    elif text == "/end":
+        data = serial_temp.get(m.from_user.id)
+
+        if not data:
+            return await m.reply("❌ Serial topilmadi")
+
+        code = data["code"]
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO content VALUES(?,?)",
+                (code, data["start_id"])
+            )
+            await db.commit()
+
+        serial_temp.pop(m.from_user.id, None)
+
+        await m.reply(f"✅ Serial yakunlandi!\n📺 Kod: {code}")
+
+    # ➕ SERIAL EXTEND
+    elif text.startswith("/serial "):
+        code = text.split()[1]
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                "UPDATE content SET message_id=? WHERE code=?",
+                (m.reply_to_message.message_id, code)
+            )
+            await db.commit()
+
+        await m.reply(f"➕ Serial davom etdi: {code}")
+
+    # ❌ DELETE
+    elif text.startswith("/unkino"):
+        code = text.split()[1]
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute("DELETE FROM content WHERE code=?", (code,))
+            await db.commit()
+
+        await m.reply("❌ O‘chirildi")
+
+    # 📣 ALL
+    elif text == "/all":
+        users = await get_users()
+
+        for u in users:
+            try:
+                await bot.copy_message(
+                    u[0],
+                    GROUP_ID,
+                    m.reply_to_message.message_id,
+                    protect_content=True
+                )
+            except:
+                pass
+
+    # 👤 SEND TO USER
+    elif text.startswith("/"):
+        try:
+            uid = int(text.replace("/", ""))
+            await bot.copy_message(
+                uid,
+                GROUP_ID,
+                m.reply_to_message.message_id,
+                protect_content=True
+            )
+        except:
+            pass
+
+# ================= USER SEND CODE =================
+
+@dp.message()
+async def send(m: types.Message):
+
+    if not m.text:
+        return
+
+    if not await check_sub(m.from_user.id):
+        return await m.answer("📢 Kanalga obuna bo‘ling!")
+
+    async with aiosqlite.connect(DB) as db:
+        cur = await db.execute(
+            "SELECT message_id FROM content WHERE code=?",
+            (m.text.strip(),)
+        )
+        row = await cur.fetchone()
+
+    if row:
+        await bot.copy_message(
+            m.chat.id,
+            GROUP_ID,
+            row[0],
+            protect_content=True
+        )
+    else:
+        await m.answer("❌ Kod topilmadi")
+
+# ================= FASTAPI =================
+
 app = FastAPI()
 
-# ================== FSM STATES ==================
-class KinoUpload(StatesGroup):
-    waiting_code = State()
-    waiting_name = State()
-    waiting_info = State()
-    waiting_video = State()
-
-class PremiumGive(StatesGroup):
-    waiting_user_id = State()
-
-class AdminManage(StatesGroup):
-    waiting_user_id = State()
-
-# ================== UTILS ==================
-def load_json(file):
-    try:
-        with open(file, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_json(file, data):
-    with open(file, "w") as f:
-        json.dump(data, f, indent=4)
-
-def get_menu(user_id):
-    users = load_json(USERS_FILE)
-    admins = load_json(ADMINS_FILE).get("admins", [])
-    
-    buttons = [
-        [KeyboardButton(text="🎬 Kino kodi orqali qidirish")],
-        [KeyboardButton(text="⭐ Premium faollashtirish")]
-    ]
-
-    if user_id in admins:
-        buttons.append([KeyboardButton(text="⚙ Admin paneli")])
-
-    buttons.append([KeyboardButton(text="🧾 Mening hisobim")])
-
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-# ================== START ==================
-@dp.message(CommandStart())
-async def start_handler(message: types.Message):
-    await message.answer(
-        "Assalomu alaykum! Botimizga hush kelibsiz 😊",
-        reply_markup=get_menu(message.from_user.id)
-    )
-
-# ================== KINO QIDIRISH ==================
-@dp.message(F.text == "🎬 Kino kodi orqali qidirish")
-async def search_kino(message: types.Message, state: FSMContext):
-    await message.answer("Iltimos kino kodini kiriting (raqamlar):")
-    await state.set_state(KinoUpload.waiting_code)
-
-@dp.message(KinoUpload.waiting_code)
-async def process_kino_code(message: types.Message, state: FSMContext):
-    code = message.text.strip()
-
-    if not code.isdigit():
-        await message.answer("❌ Kod raqamlardan iborat bo‘lishi kerak. Qaytadan kiriting:")
-        return
-
-    kino_db = load_json(KINO_FILE)
-
-    if code not in kino_db:
-        await message.answer("❌ Kino topilmadi!")
-        await state.clear()
-        return
-
-    kino = kino_db[code]
-
-    users = load_json(USERS_FILE)
-    user = users.get(str(message.from_user.id), {"tarif": "oddiy"})
-    premium = user.get("tarif", "oddiy") == "premium"
-
-    video = kino.get("video")
-    name = kino.get("name")
-    info = kino.get("info")
-
-    text = f"Kino nomi: {name}\nKino haqida: {info}\nKino kodi: {code}"
-
-    if premium:
-        await message.answer_video(video, caption=text)
-    else:
-        await message.answer_video(video, caption=text)
-        await message.answer("❌ Oddiy foydalanuvchilar kino yuklab olish, nusxalash va uzatish imkoniga ega emaslar.")
-
-    await state.clear()
-
-# ================== PREMIUM INFO ==================
-@dp.message(F.text == "⭐ Premium faollashtirish")
-async def premium_info(message: types.Message):
-    await message.answer(
-        "Siz bizning botimizning Premium tarifidan foydalanmoqchisiz\n\n"
-        "Afzalliklari:\n"
-        "1. Kino yuklash va nusxalash imkoniyati\n"
-        "2. Hech qanday obunalarsiz foydalanish\n"
-        "3. Oddiy tariflarda yo‘q yangi kinolar\n\n"
-        "Tariflar:\n30 kun - 20.000 UZS\n\n"
-        "Premium berish faqat adminlar orqali amalga oshiriladi."
-    )
-
-# ================== MENING HISOBIM ==================
-@dp.message(F.text == "🧾 Mening hisobim")
-async def my_account(message: types.Message):
-
-    users = load_json(USERS_FILE)
-
-    user = users.get(
-        str(message.from_user.id),
-        {"name": message.from_user.full_name, "tarif": "oddiy"}
-    )
-
-    tarif = user.get("tarif", "oddiy")
-
-    if tarif == "premium":
-
-        end_date = user.get("premium_end")
-
-        end_date_dt = datetime.strptime(end_date, "%Y-%m-%d")
-        days_left = (end_date_dt - datetime.now()).days
-        days_left = max(days_left, 0)
-
-        msg = f"Foydalanuvchi ismi: {user.get('name')}\nTarifi: premium\nVaqti: {days_left} kun qolgan"
-
-    else:
-
-        msg = f"Foydalanuvchi ismi: {user.get('name')}\nTarifi: oddiy\nVaqti: doimiy"
-
-    await message.answer(msg)
-
-# ================== ADMIN PANEL ==================
-@dp.message(F.text == "⚙ Admin paneli")
-async def admin_panel(message: types.Message):
-
-    admins = load_json(ADMINS_FILE).get("admins", [])
-
-    if message.from_user.id not in admins:
-        await message.answer("❌ Sizga ruxsat yo‘q")
-        return
-
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎬 Kino yuklash")],
-            [KeyboardButton(text="⭐ Premium berish")],
-            [KeyboardButton(text="🛠 Admin qo‘shish/olib tashlash")],
-            [KeyboardButton(text="↩ Orqaga")]
-        ],
-        resize_keyboard=True
-    )
-
-    await message.answer("Admin paneliga hush kelibsiz", reply_markup=kb)
-
-# ================== FastAPI ==================
-@app.get("/")
-def home():
-    return {"status": "Bot ishlayapti"}
-
 @app.on_event("startup")
-async def on_startup():
-    asyncio.create_task(dp.start_polling(bot))
+async def startup():
+    await init_db()
+    await bot.set_webhook(WEBHOOK_URL)
 
-# ================== RUN ==================
+@app.post(WEBHOOK_PATH)
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
+
+@app.get("/")
+async def home():
+    return {"status": "running"}
+
+# ================= RUN =================
+
 if __name__ == "__main__":
-
-    port = int(os.environ.get("PORT", 10000))
-
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
