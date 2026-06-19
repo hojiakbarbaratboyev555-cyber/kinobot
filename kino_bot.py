@@ -10,10 +10,11 @@ from aiogram.types import Update
 
 # ================= CONFIG =================
 
-BOT_TOKEN = "8759475620:AAGYtzehxNQlFGPXBS_nfu76vbunbDmG9R0"
+BOT_TOKEN = "8759475620:AAHs8cPsJOzH7lUP-4g77U17yTTzwtdR1Yo"
 
-GROUP_ID = -5587260606
-CHANNEL_ID = -100123456789
+GROUP_ID = -1004429456505
+CHANNEL_ID = -1003869575908
+CHANNEL_LINK = "https://t.me/+Kk-MfGR16B5lY2M1"
 
 WEBHOOK_HOST = "https://kinobot-0yka.onrender.com"
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
@@ -26,7 +27,6 @@ PORT = int(os.environ.get("PORT", 10000))
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-
 logging.basicConfig(level=logging.INFO)
 
 serial_temp = {}
@@ -74,11 +74,13 @@ async def start(m: types.Message):
     await add_user(m.from_user.id)
 
     if not await check_sub(m.from_user.id):
-        return await m.answer("📢 Kanalga obuna bo‘ling!")
+        return await m.answer(
+            f"📢 Botdan foydalanish uchun obuna bo‘ling:\n{CHANNEL_LINK}"
+        )
 
     await m.answer("🎬 Kino botga xush kelibsiz!\nKod yuboring.")
 
-# ================= USER SEND CODE (ONLY PRIVATE) =================
+# ================= USER CODE =================
 
 @dp.message(F.chat.type == "private")
 async def send_movie(m: types.Message):
@@ -87,7 +89,7 @@ async def send_movie(m: types.Message):
         return
 
     if not await check_sub(m.from_user.id):
-        return await m.answer("📢 Kanalga obuna bo‘ling!")
+        return await m.answer("📢 Avval kanalga obuna bo‘ling!")
 
     async with aiosqlite.connect(DB) as db:
         cur = await db.execute(
@@ -104,9 +106,9 @@ async def send_movie(m: types.Message):
             protect_content=True
         )
     else:
-        await m.answer("❌ Kino kodi topilmadi")
+        await m.answer("❌ Kod topilmadi")
 
-# ================= GROUP SYSTEM =================
+# ================= GROUP COMMANDS =================
 
 @dp.message(F.chat.id == GROUP_ID)
 async def group(m: types.Message):
@@ -127,7 +129,7 @@ async def group(m: types.Message):
             )
             await db.commit()
 
-        await m.reply(f"🎬 Kod: {code}")
+        await m.reply(f"🎬 Kino kodi: {code}")
         return
 
     # 📺 SERIAL START
@@ -142,7 +144,21 @@ async def group(m: types.Message):
         await m.reply(f"📺 Serial boshlandi: {code}")
         return
 
-    # 📺 SERIAL END
+    # 📺 SERIAL CONTINUE (kid)
+    if text.startswith("/serial "):
+        code = text.split()[1]
+
+        async with aiosqlite.connect(DB) as db:
+            await db.execute(
+                "UPDATE content SET message_id=? WHERE code=?",
+                (m.reply_to_message.message_id, code)
+            )
+            await db.commit()
+
+        await m.reply(f"➕ Serial davom etdi: {code}")
+        return
+
+    # 📺 END
     if text == "/end":
         data = serial_temp.get(m.from_user.id)
 
@@ -163,21 +179,7 @@ async def group(m: types.Message):
         await m.reply(f"✅ Serial tugadi!\n📺 Kod: {code}")
         return
 
-    # ➕ SERIAL CONTINUE
-    if text.startswith("/serial "):
-        code = text.split()[1]
-
-        async with aiosqlite.connect(DB) as db:
-            await db.execute(
-                "UPDATE content SET message_id=? WHERE code=?",
-                (m.reply_to_message.message_id, code)
-            )
-            await db.commit()
-
-        await m.reply(f"➕ Serial davom etdi: {code}")
-        return
-
-    # ❌ DELETE
+    # ❌ UNKINO
     if text.startswith("/unkino"):
         code = text.split()[1]
 
@@ -188,7 +190,7 @@ async def group(m: types.Message):
         await m.reply("❌ O‘chirildi")
         return
 
-    # 📣 ALL USERS
+    # 📣 ALL
     if text == "/all":
         users = await get_users()
 
@@ -203,19 +205,22 @@ async def group(m: types.Message):
             except:
                 pass
 
+        await m.reply("📣 Hammaga yuborildi")
         return
 
-    # 👤 SEND TO USER
-    if text.startswith("/") and text[1:].isdigit():
-        uid = int(text[1:])
-
+    # 👤 SEND BY ID
+    if text.startswith("/"):
         try:
+            uid = int(text.replace("/", ""))
+
             await bot.copy_message(
                 uid,
                 GROUP_ID,
                 m.reply_to_message.message_id,
                 protect_content=True
             )
+
+            await m.reply("👤 Yuborildi")
         except:
             pass
 
